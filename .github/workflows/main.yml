@@ -36,19 +36,6 @@ jobs:
           sdk install gradle 8.7
           echo "$HOME/.sdkman/candidates/gradle/current/bin" >> $GITHUB_PATH
 
-      - name: Build ScreenDaemon.jar
-        run: |
-          mkdir -p build_daemon/classes app/src/main/assets
-          javac -cp "$ANDROID_HOME/platforms/android-34/android.jar" \
-            -d build_daemon/classes \
-            app/src/main/java/com/example/detectcamera/ScreenDaemon.java
-          
-          $ANDROID_HOME/build-tools/34.0.0/d8 \
-            --output build_daemon/classes.jar \
-            build_daemon/classes/com/example/detectcamera/ScreenDaemon.class
-          
-          cp build_daemon/classes.jar app/src/main/assets/ScreenDaemon.jar
-
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
 
@@ -57,4 +44,3 @@ jobs:
         with:
           name: detect-camera-app
           path: app/build/outputs/apk/debug/app-debug.apk
-          
