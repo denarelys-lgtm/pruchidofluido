@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.example.screendaemon'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 26
+        targetSdk 34
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+// Tarea personalizada para convertir el archivo .class a .dex (ScreenDaemon.jar) y copiarlo en assets
+task buildDaemonJar(type: Exec) {
+    dependsOn 'compileDebugJavaWithJavac'
+    
+    doFirst {
+        def assetsDir = file("${project.rootDir}/app/src/main/assets")
+        if (!assetsDir.exists()) {
+            assetsDir.mkdirs()
+        }
+    }
+
+    commandLine 'bash', '-c', """
+        $ANDROID_HOME/build-tools/34.0.0/d8 \
+            --output ${project.rootDir}/app/src/main/assets/ScreenDaemon.jar \
+            ${buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/example/detectcamera/ScreenDaemon.class
+    """
+}
+
+project(':app').tasks.preBuild.dependsOn buildDaemonJar
