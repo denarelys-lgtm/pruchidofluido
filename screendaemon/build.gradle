@@ -16,7 +16,6 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
-    // Le indicamos al módulo que tome el archivo ScreenDaemon.java ubicado en :app
     sourceSets {
         main {
             java {
@@ -25,6 +24,16 @@ android {
             }
         }
     }
+}
+
+dependencies {
+    // Librerías requeridas para resolver los imports al compilar
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+    implementation 'org.nanohttpd:nanohttpd-websocket:2.3.1'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.annotation:annotation:1.7.0'
+    implementation 'dev.rikka.shizuku:api:13.1.0'
+    implementation 'dev.rikka.shizuku:provider:13.1.0'
 }
 
 task buildDaemonJar {
@@ -43,18 +52,19 @@ task buildDaemonJar {
             d8Executable += ".bat"
         }
 
-        // Búsqueda dinámica de la clase compilada independientemente de la variante interna
-        def classFile = fileTree(dir: "${buildDir}/intermediates/javac", include: '**/ScreenDaemon.class').singleFile
-        def outputJar = file("${assetsDir}/ScreenDaemon.jar")
-
-        if (classFile.exists()) {
-            exec {
-                commandLine d8Executable, '--output', outputJar.absolutePath, classFile.absolutePath
-            }
-            println "ScreenDaemon.jar generado con éxito en: ${outputJar.absolutePath}"
-        } else {
+        // Busca el archivo compilado ScreenDaemon.class
+        def classFiles = fileTree(dir: "${buildDir}/intermediates/javac/debug", include: '**/ScreenDaemon.class').files
+        if (classFiles.isEmpty()) {
             throw new GradleException("No se encontró el archivo ScreenDaemon.class compilado.")
         }
+        
+        def classFile = classFiles.first()
+        def outputJar = file("${assetsDir}/ScreenDaemon.jar")
+
+        exec {
+            commandLine d8Executable, '--output', outputJar.absolutePath, classFile.absolutePath
+        }
+        println "ScreenDaemon.jar generado con éxito en: ${outputJar.absolutePath}"
     }
 }
 
