@@ -1,77 +1,44 @@
 package com.example.detectcamera;
 
-import android.util.Base64;
-import fi.iki.elonen.NanoHTTPD;
+import android.content.Context;
 import fi.iki.elonen.NanoWSD;
-import fi.iki.elonen.NanoWSD.WebSocketFrame.CloseCode;
-
+import fi.iki.elonen.NanoHTTPD.IHTTPSession;
+import fi.iki.elonen.NanoHTTPD.Response;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 public class WebServer extends NanoWSD {
 
-    private String usuarioValido = "";
-    private String passwordValida = "";
-    private CameraService cameraService;
-    private final AudioStreamManager audioStreamManager = new AudioStreamManager();
-    private final Set<ScreenWebSocket> sockets = ConcurrentHashMap.newKeySet();
+    private final String username;
+    private final String password;
+    private static final List<ScreenWebSocket> activeSockets = new ArrayList<>();
+    private static byte[] spsPpsBuffer = null;
 
-    public WebServer(int port) {
+    public WebServer(int port, String username, String password) {
         super(port);
+        this.username = username;
+        this.password = password;
     }
 
-    public void setCameraService(CameraService service) {
-        this.cameraService = service;
-    }
-
-    public void setCredenciales(String user, String pass) {
-        this.usuarioValido = user != null ? user.trim() : "";
-        this.passwordValida = pass != null ? pass.trim() : "";
-    }
-
-    // Método principal para transmitir H.264 por WebSocket
-    public void retransmitirFrameH264(byte[] h264Chunk) {
-        if (h264Chunk == null) return;
-        for (ScreenWebSocket socket : sockets) {
-            try {
-                socket.send(h264Chunk);
-            } catch (IOException e) {
-                socket.closeQuietly();
+    public static void sendH264Chunk(byte[] chunk) {
+        // Detectar y guardar SPS/PPS NAL units (0x00000001 seguido de NAL 7 u 8)
+        if (chunk.length > 4 && chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 1) {
+            int nalType = chunk[4] & 0x1F;
+            if (nalType == 7 || nalType == 8) {
+                spsPpsBuffer = chunk.clone();
             }
         }
-    }
 
-    // Métodos de compatibilidad requeridos por CameraService y ScreenCaptureController
-    public void actualizarFrameCamara(byte[] frame) {
-        // Compatibilidad con CameraService
-    }
-
-    public void actualizarFramePantalla(byte[] frame) {
-        // Compatibilidad con ScreenCaptureController
-        if (frame != null) {
-            retransmitirFrameH264(frame);
+        synchronized (activeSockets) {
+            for (ScreenWebSocket socket : activeSockets) {
+                try {
+                    socket.send(chunk);
+                } catch (IOException ignored) {}
+            }
         }
-    }
-
-    public void detenerAudio() {
-        audioStreamManager.detenerCaptura();
-    }
-
-    private boolean estaAutenticado(IHTTPSession session) {
-        if (usuarioValido.isEmpty() || passwordValida.isEmpty()) return true;
-        String authHeader = session.getHeaders().get("authorization");
-        if (authHeader != null && authHeader.startsWith("Basic ")) {
-            try {
-                String base64Creds = authHeader.substring(6).trim();
-                String credenciales = new String(Base64.decode(base64Creds, Base64.DEFAULT));
-                String[] partes = credenciales.split(":", 2);
-                if (partes.length == 2) {
-                    return usuarioValido.equals(partes[0]) && passwordValida.equals(partes[1]);
-                }
-            } catch (Exception ignored) {}
-        }
-        return false;
     }
 
     @Override
@@ -82,80 +49,101 @@ public class WebServer extends NanoWSD {
     @Override
     public Response serveHttp(IHTTPSession session) {
         if (!estaAutenticado(session)) {
-            Response response = newFixedLengthResponse(Response.Status.UNAUTHORIZED, "text/plain", "Acceso Denegado.");
-            response.addHeader("WWW-Authenticate", "Basic realm=\"Acceso Restringido\"");
-            return response;
+            return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "text/plain", "Acceso denegado.");
         }
 
         String uri = session.getUri();
-
-        if ("/audio.wav".equals(uri)) {
-            java.io.InputStream audioStream = audioStreamManager.crearAudioStreamCliente();
-            if (audioStream != null) {
-                return newChunkedResponse(Response.Status.OK, "audio/wav", audioStream);
-            }
-            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "Error iniciando audio");
+        if ("/stream/screen".equals(uri)) {
+            return super.serveHttp(session);
         }
 
-        if ("/api/camera".equals(uri)) {
-            String action = session.getParms().get("action");
-            if (cameraService != null) {
-                if ("on".equals(action)) cameraService.iniciarCamara();
-                else if ("off".equals(action)) cameraService.detenerCamara();
-                else if ("toggle".equals(action)) cameraService.alternarCamara();
-            }
-            return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"ok\"}");
-        }
-
-        String html = "<!DOCTYPE html><html><head><title>Panel Ultra-Fluido 60FPS</title>"
-                + "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-                + "<style>body{background:#121212;color:#fff;font-family:sans-serif;text-align:center;margin:0;padding:15px;}"
-                + "canvas{background:#000;border-radius:8px;max-width:100%;height:auto;}</style></head><body>"
-                + "<h1>Transmisión H.264 (60 FPS)</h1>"
-                + "<canvas id='display'></canvas>"
-                + "<script src='https://cdn.jsdelivr.net/npm/jmuxer@2.0.4/dist/jmuxer.min.js'></script>"
-                + "<script>"
-                + "  const jmuxer = new JMuxer({ node: 'display', mode: 'video', fps: 60, clearBuffer: true });"
-                + "  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';"
-                + "  const ws = new WebSocket(protocol + '//' + window.location.host + '/ws/screen');"
-                + "  ws.binaryType = 'arraybuffer';"
-                + "  ws.onmessage = (e) => jmuxer.feed({ video: new Uint8Array(e.data) });"
-                + "</script></body></html>";
-
-        return newFixedLengthResponse(Response.Status.OK, "text/html", html);
+        return newFixedLengthResponse(Response.Status.OK, "text/html", getWebInterfaceHtml());
     }
 
-    private class ScreenWebSocket extends WebSocket {
+    private boolean estaAutenticado(IHTTPSession session) {
+        String authHeader = session.getHeaders().get("authorization");
+        if (authHeader != null && authHeader.startsWith("Basic ")) {
+            String base64Credentials = authHeader.substring("Basic ".length()).trim();
+            String credentials = new String(android.util.Base64.decode(base64Credentials, android.util.Base64.NO_WRAP));
+            String[] parts = credentials.split(":", 2);
+            return parts.length == 2 && username.equals(parts[0]) && password.equals(parts[1]);
+        }
+        return false;
+    }
+
+    private String getWebInterfaceHtml() {
+        return "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            + "<title>Panel de Control - DetectCamera</title>"
+            + "<style>"
+            + "body { font-family: Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }"
+            + "h1 { text-align: center; color: #00e676; }"
+            + ".grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1200px; margin: auto; }"
+            + ".card { background: #1e1e1e; padding: 15px; border-radius: 10px; border: 1px solid #333; text-align: center; }"
+            + "video, canvas { width: 100%; height: 320px; background: #000; border-radius: 6px; border: 1px solid #444; }"
+            + ".controls { margin-top: 15px; display: flex; justify-content: center; gap: 10px; }"
+            + "button { background: #00e676; color: #000; border: none; padding: 10px 15px; font-weight: bold; border-radius: 5px; cursor: pointer; }"
+            + "button:hover { background: #00b359; }"
+            + "</style></head><body>"
+            + "<h1>Panel de Monitoreo en Vivo</h1>"
+            + "<div class='grid'>"
+            + "  <div class='card'>"
+            + "    <h3>Cámara del Dispositivo</h3>"
+            + "    <canvas id='cameraCanvas'></canvas>"
+            + "    <div class='controls'><button onclick='toggleCamera()'>Alternar Cámara</button></div>"
+            + "  </div>"
+            + "  <div class='card'>"
+            + "    <h3>Transmisión de Pantalla</h3>"
+            + "    <video id='screenVideo' autoplay playsinline muted></video>"
+            + "    <div class='controls'><button onclick='connectScreen()'>Reconectar Pantalla</button></div>"
+            + "  </div>"
+            + "</div>"
+            + "<script>"
+            + "let wsScreen;"
+            + "function connectScreen() {"
+            + "  const loc = window.location;"
+            + "  const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/stream/screen';"
+            + "  wsScreen = new WebSocket(wsUrl);"
+            + "  wsScreen.binaryType = 'arraybuffer';"
+            + "  wsScreen.onmessage = function(e) {"
+            + "    /* Aquí se procesa el flujo H.264 recibido */"
+            + "  };"
+            + "}"
+            + "window.onload = connectScreen;"
+            + "</script></body></html>";
+    }
+
+    private class ScreenWebSocket extends NanoWSD.WebSocket {
         public ScreenWebSocket(IHTTPSession handshakeRequest) {
             super(handshakeRequest);
         }
 
         @Override
         protected void onOpen() {
-            sockets.add(this);
+            synchronized (activeSockets) {
+                activeSockets.add(this);
+            }
+            // Envía inmediatamente el búfer SPS/PPS guardado para que el reproductor no se quede en negro
+            if (spsPpsBuffer != null) {
+                try {
+                    send(spsPpsBuffer);
+                } catch (IOException ignored) {}
+            }
         }
 
         @Override
-        protected void onClose(CloseCode code, String reason, boolean initiatedByRemote) {
-            sockets.remove(this);
+        protected void onClose(NanoWSD.WebSocketFrame.CloseCode code, String reason, boolean initiatedByRemote) {
+            synchronized (activeSockets) {
+                activeSockets.remove(this);
+            }
         }
 
         @Override
-        protected void onMessage(WebSocketFrame message) {}
+        protected void onMessage(NanoWSD.WebSocketFrame message) {}
 
         @Override
-        protected void onPong(WebSocketFrame pong) {}
+        protected void onPong(NanoWSD.WebSocketFrame pong) {}
 
         @Override
-        protected void onException(IOException exception) {
-            closeQuietly();
-        }
-
-        public void closeQuietly() {
-            try {
-                close(CloseCode.NormalClosure, "Closing", false);
-            } catch (Exception ignored) {}
-            sockets.remove(this);
-        }
+        protected void Exception(IOException exception) {}
     }
 }
