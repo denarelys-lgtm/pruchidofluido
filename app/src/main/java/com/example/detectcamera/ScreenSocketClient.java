@@ -13,8 +13,20 @@ public class ScreenSocketClient {
 
     private boolean isRunning = false;
     private Thread clientThread;
+    private WebServer webServer;
+
+    public ScreenSocketClient() {}
+
+    public ScreenSocketClient(WebServer webServer) {
+        this.webServer = webServer;
+    }
+
+    public void start() {
+        start(this.webServer);
+    }
 
     public void start(WebServer webServer) {
+        this.webServer = webServer;
         if (isRunning) return;
         isRunning = true;
 
@@ -32,8 +44,8 @@ public class ScreenSocketClient {
                             byte[] h264Buffer = new byte[length];
                             dataIn.readFully(h264Buffer);
 
-                            if (webServer != null) {
-                                webServer.retransmitirFrameH264(h264Buffer);
+                            if (this.webServer != null) {
+                                this.webServer.retransmitirFrameH264(h264Buffer);
                             }
                         }
                     }
