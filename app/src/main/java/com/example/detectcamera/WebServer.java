@@ -1,12 +1,9 @@
 package com.example.detectcamera;
 
-import android.content.Context;
 import fi.iki.elonen.NanoWSD;
 import fi.iki.elonen.NanoHTTPD.IHTTPSession;
 import fi.iki.elonen.NanoHTTPD.Response;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,7 +21,6 @@ public class WebServer extends NanoWSD {
     }
 
     public static void sendH264Chunk(byte[] chunk) {
-        // Detectar y guardar SPS/PPS NAL units (0x00000001 seguido de NAL 7 u 8)
         if (chunk.length > 4 && chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 1) {
             int nalType = chunk[4] & 0x1F;
             if (nalType == 7 || nalType == 8) {
@@ -73,7 +69,7 @@ public class WebServer extends NanoWSD {
 
     private String getWebInterfaceHtml() {
         return "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-            + "<title>Panel de Control - DetectCamera</title>"
+            + "<title>Panel de Monitoreo</title>"
             + "<style>"
             + "body { font-family: Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }"
             + "h1 { text-align: center; color: #00e676; }"
@@ -87,7 +83,7 @@ public class WebServer extends NanoWSD {
             + "<h1>Panel de Monitoreo en Vivo</h1>"
             + "<div class='grid'>"
             + "  <div class='card'>"
-            + "    <h3>Cámara del Dispositivo</h3>"
+            + "    <h3>Vista de Cámara</h3>"
             + "    <canvas id='cameraCanvas'></canvas>"
             + "    <div class='controls'><button onclick='toggleCamera()'>Alternar Cámara</button></div>"
             + "  </div>"
@@ -104,9 +100,7 @@ public class WebServer extends NanoWSD {
             + "  const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/stream/screen';"
             + "  wsScreen = new WebSocket(wsUrl);"
             + "  wsScreen.binaryType = 'arraybuffer';"
-            + "  wsScreen.onmessage = function(e) {"
-            + "    /* Aquí se procesa el flujo H.264 recibido */"
-            + "  };"
+            + "  wsScreen.onmessage = function(e) {};"
             + "}"
             + "window.onload = connectScreen;"
             + "</script></body></html>";
@@ -122,7 +116,6 @@ public class WebServer extends NanoWSD {
             synchronized (activeSockets) {
                 activeSockets.add(this);
             }
-            // Envía inmediatamente el búfer SPS/PPS guardado para que el reproductor no se quede en negro
             if (spsPpsBuffer != null) {
                 try {
                     send(spsPpsBuffer);
