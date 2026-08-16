@@ -15,30 +15,21 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
-
-    sourceSets {
-        main {
-            java {
-                srcDirs = ['../app/src/main/java']
-                include '**/ScreenDaemon.java'
-            }
-        }
-    }
 }
 
-dependencies {
-    // Librerías requeridas para resolver los imports al compilar
-    implementation 'org.nanohttpd:nanohttpd:2.3.1'
-    implementation 'org.nanohttpd:nanohttpd-websocket:2.3.1'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'androidx.annotation:annotation:1.7.0'
-    implementation 'dev.rikka.shizuku:api:13.1.0'
-    implementation 'dev.rikka.shizuku:provider:13.1.0'
+// Compila ÚNICAMENTE ScreenDaemon.java de forma aislada sin procesar la UI ni recursos R de :app
+task compileDaemonClass(type: JavaCompile) {
+    source = fileTree(dir: '../app/src/main/java', include: '**/ScreenDaemon.java')
+    destinationDirectory = file("${buildDir}/intermediates/daemon_classes")
+    classpath = files(android.getBootClasspath())
+    sourceCompatibility = '1.8'
+    targetCompatibility = '1.8'
 }
 
+// Transforma la clase compilada en DEX/JAR dentro de app/src/main/assets
 task buildDaemonJar {
-    dependsOn 'compileDebugJavaWithJavac'
-    
+    dependsOn compileDaemonClass
+
     doLast {
         def assetsDir = file("${project.rootDir}/app/src/main/assets")
         if (!assetsDir.exists()) {
@@ -47,17 +38,16 @@ task buildDaemonJar {
 
         def sdkDir = android.sdkDirectory.path
         def d8Executable = "${sdkDir}/build-tools/34.0.0/d8"
-        
+
         if (System.getProperty('os.name').toLowerCase().contains('windows')) {
             d8Executable += ".bat"
         }
 
-        // Busca el archivo compilado ScreenDaemon.class
-        def classFiles = fileTree(dir: "${buildDir}/intermediates/javac/debug", include: '**/ScreenDaemon.class').files
+        def classFiles = fileTree(dir: "${buildDir}/intermediates/daemon_classes", include: '**/ScreenDaemon.class').files
         if (classFiles.isEmpty()) {
-            throw new GradleException("No se encontró el archivo ScreenDaemon.class compilado.")
+            throw new GradleException("No se encontró el archivo ScreenDaemon.class compilado en ${buildDir}/intermediates/daemon_classes")
         }
-        
+
         def classFile = classFiles.first()
         def outputJar = file("${assetsDir}/ScreenDaemon.jar")
 
