@@ -1,5 +1,6 @@
 package com.example.detectcamera;
 
+import android.util.Base64;
 import fi.iki.elonen.NanoWSD;
 import fi.iki.elonen.NanoHTTPD.IHTTPSession;
 import fi.iki.elonen.NanoHTTPD.Response;
@@ -9,10 +10,18 @@ import java.util.List;
 
 public class WebServer extends NanoWSD {
 
-    private final String username;
-    private final String password;
+    private String username = "";
+    private String password = "";
+    private CameraService cameraService;
+    
     private static final List<ScreenWebSocket> activeSockets = new ArrayList<>();
     private static byte[] spsPpsBuffer = null;
+    private byte[] ultimoFrameCamara = null;
+    private byte[] ultimoFramePantalla = null;
+
+    public WebServer(int port) {
+        super(port);
+    }
 
     public WebServer(int port, String username, String password) {
         super(port);
@@ -20,8 +29,33 @@ public class WebServer extends NanoWSD {
         this.password = password;
     }
 
+    public void setCredenciales(String username, String password) {
+        this.username = username;
+        this.password = password;
+    }
+
+    public void setCameraService(CameraService cameraService) {
+        this.cameraService = cameraService;
+    }
+
+    public void actualizarFrameCamara(byte[] jpegData) {
+        this.ultimoFrameCamara = jpegData;
+    }
+
+    public void actualizarFramePantalla(byte[] jpegData) {
+        this.ultimoFramePantalla = jpegData;
+    }
+
+    public void detenerAudio() {
+        // Método de soporte para liberar recursos de audio
+    }
+
+    public void retransmitirFrameH264(byte[] h264Buffer) {
+        sendH264Chunk(h264Buffer);
+    }
+
     public static void sendH264Chunk(byte[] chunk) {
-        if (chunk.length > 4 && chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 1) {
+        if (chunk != null && chunk.length > 4 && chunk[0] == 0 && chunk[1] == 0 && chunk[2] == 0 && chunk[3] == 1) {
             int nalType = chunk[4] & 0x1F;
             if (nalType == 7 || nalType == 8) {
                 spsPpsBuffer = chunk.clone();
@@ -57,10 +91,13 @@ public class WebServer extends NanoWSD {
     }
 
     private boolean estaAutenticado(IHTTPSession session) {
+        if (username.isEmpty() && password.isEmpty()) {
+            return true;
+        }
         String authHeader = session.getHeaders().get("authorization");
         if (authHeader != null && authHeader.startsWith("Basic ")) {
             String base64Credentials = authHeader.substring("Basic ".length()).trim();
-            String credentials = new String(android.util.Base64.decode(base64Credentials, android.util.Base64.NO_WRAP));
+            String credentials = new String(Base64.decode(base64Credentials, Base64.NO_WRAP));
             String[] parts = credentials.split(":", 2);
             return parts.length == 2 && username.equals(parts[0]) && password.equals(parts[1]);
         }
@@ -102,6 +139,9 @@ public class WebServer extends NanoWSD {
             + "  wsScreen.binaryType = 'arraybuffer';"
             + "  wsScreen.onmessage = function(e) {};"
             + "}"
+            + "function toggleCamera() {"
+            + "  fetch('/toggleCamera');"
+            + "}"
             + "window.onload = connectScreen;"
             + "</script></body></html>";
     }
@@ -137,6 +177,6 @@ public class WebServer extends NanoWSD {
         protected void onPong(NanoWSD.WebSocketFrame pong) {}
 
         @Override
-        protected void Exception(IOException exception) {}
+        protected void onException(IOException exception) {}
     }
 }
