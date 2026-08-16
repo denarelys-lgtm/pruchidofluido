@@ -17,16 +17,18 @@ android {
     }
 }
 
-// Compila únicamente ScreenDaemon.java asignando android.jar en tiempo de ejecución
+// Compila únicamente ScreenDaemon.java de forma aislada
 task compileDaemonClass(type: JavaCompile) {
     source = fileTree(dir: '../app/src/main/java', include: '**/ScreenDaemon.java')
     destinationDirectory = file("${buildDir}/intermediates/daemon_classes")
     sourceCompatibility = '1.8'
     targetCompatibility = '1.8'
+    classpath = files() // Inicialización requerida para validación de Gradle
+}
 
-    doFirst {
-        classpath = files(android.bootClasspath)
-    }
+// Asignación lazy del classpath del SDK de Android tras evaluar el proyecto
+afterEvaluate {
+    compileDaemonClass.classpath = files(android.bootClasspath)
 }
 
 // Convierte la clase compilada a DEX/JAR en app/src/main/assets
