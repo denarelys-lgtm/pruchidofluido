@@ -14,12 +14,12 @@ import java.nio.ByteBuffer;
 
 public class ScreenDaemon {
 
-    private static final String MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC; // H.264
+    private static final String MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC;
     private static final int WIDTH = 720;
     private static final int HEIGHT = 1280;
-    private static final int BIT_RATE = 3000000; // 3 Mbps
-    private static final int FRAME_RATE = 30;      // 30 FPS
-    private static final int I_FRAME_INTERVAL = 1; // 1 segundo entre keyframes
+    private static final int BIT_RATE = 3000000;
+    private static final int FRAME_RATE = 30;
+    private static final int I_FRAME_INTERVAL = 1;
 
     private static MediaCodec encoder;
     private static Surface inputSurface;
@@ -87,26 +87,20 @@ public class ScreenDaemon {
     private static void createVirtualDisplay() throws Exception {
         Class<?> surfaceControlClass = Class.forName("android.view.SurfaceControl");
 
-        // 1. Obtener Token del Display Físico Principal
         IBinder mainDisplayToken = getMainDisplayToken(surfaceControlClass);
 
-        // 2. Crear Display Virtual para la captura
         Method createDisplayMethod = surfaceControlClass.getMethod("createDisplay", String.class, boolean.class);
         virtualDisplayToken = (IBinder) createDisplayMethod.invoke(null, "ScreenDaemonDisplay", false);
 
-        // 3. Iniciar Transacción de SurfaceControl
         openSurfaceControlTransaction(surfaceControlClass);
 
         try {
-            // Asignar la superficie de entrada del MediaCodec
             Method setDisplaySurfaceMethod = surfaceControlClass.getMethod("setDisplaySurface", IBinder.class, Surface.class);
             setDisplaySurfaceMethod.invoke(null, virtualDisplayToken, inputSurface);
 
-            // Asignar LayerStack 0 (capa pública activa del sistema)
             Method setDisplayLayerStackMethod = surfaceControlClass.getMethod("setDisplayLayerStack", IBinder.class, int.class);
             setDisplayLayerStackMethod.invoke(null, virtualDisplayToken, 0);
 
-            // Configurar Rectángulos de Proyección
             Rect layerStackRect = new Rect(0, 0, WIDTH, HEIGHT);
             Rect displayRect = new Rect(0, 0, WIDTH, HEIGHT);
 
@@ -129,8 +123,7 @@ public class ScreenDaemon {
                 return (IBinder) getPhysicalDisplayTokenMethod.invoke(null, ids[0]);
             }
         }
-        
-        // Fallback para versiones anteriores o reflexiones estándar
+
         Method getBuiltInDisplayMethod = surfaceControlClass.getMethod("getBuiltInDisplay", int.class);
         return (IBinder) getBuiltInDisplayMethod.invoke(null, 0);
     }
@@ -139,18 +132,14 @@ public class ScreenDaemon {
         try {
             Method openTransactionMethod = surfaceControlClass.getMethod("openTransaction");
             openTransactionMethod.invoke(null);
-        } catch (NoSuchMethodException e) {
-            // En versiones recientes de Android las transacciones se aplican automáticamente o mediante GlobalTransaction
-        }
+        } catch (NoSuchMethodException ignored) {}
     }
 
     private static void closeSurfaceControlTransaction(Class<?> surfaceControlClass) throws Exception {
         try {
             Method closeTransactionMethod = surfaceControlClass.getMethod("closeTransaction");
             closeTransactionMethod.invoke(null);
-        } catch (NoSuchMethodException e) {
-            // Fallback si no existe closeTransaction
-        }
+        } catch (NoSuchMethodException ignored) {}
     }
 
     private static void destroyVirtualDisplay(IBinder token) {
@@ -168,13 +157,12 @@ public class ScreenDaemon {
         long lastKeyframeRequest = System.currentTimeMillis();
 
         while (isRunning) {
-            // Solicitar un Keyframe cada 3 segundos si el reproductor web requiere reconexión
             if (System.currentTimeMillis() - lastKeyframeRequest > 3000) {
                 requestKeyframe();
                 lastKeyframeRequest = System.currentTimeMillis();
             }
 
-            int outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000); // 10ms timeout
+            int outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000);
 
             if (outputBufferIndex >= 0) {
                 ByteBuffer outputBuffer = encoder.getOutputBuffer(outputBufferIndex);
@@ -186,8 +174,11 @@ public class ScreenDaemon {
                     byte[] outData = new byte[bufferInfo.size];
                     outputBuffer.get(outData);
 
-                    // Transmitir fragmento H.264 al WebServer
-                    WebServer.sendH264Chunk(outData);
+                    // Escribe los bytes H.264 a la salida estándar para desacoplar el proceso
+                    try {
+                        System.out.write(outData);
+                        System.out.flush();
+                    } catch (Exception ignored) {}
                 }
 
                 encoder.releaseOutputBuffer(outputBufferIndex, false);
