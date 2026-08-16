@@ -23,10 +23,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
       - name: Build APK with Gradle
         run: ./gradlew assembleDebug --no-daemon
-
-      # Puntos para subir los archivos generados como Zip descargable:
 
       - name: Upload ScreenDaemon JAR
         uses: actions/upload-artifact@v4
