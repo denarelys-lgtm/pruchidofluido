@@ -15,9 +15,18 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+
+    // Le indicamos al módulo que tome el archivo ScreenDaemon.java ubicado en :app
+    sourceSets {
+        main {
+            java {
+                srcDirs = ['../app/src/main/java']
+                include '**/ScreenDaemon.java'
+            }
+        }
+    }
 }
 
-// Tarea para convertir las clases a formato DEX y empaquetar el ScreenDaemon.jar en assets
 task buildDaemonJar {
     dependsOn 'compileDebugJavaWithJavac'
     
@@ -27,25 +36,24 @@ task buildDaemonJar {
             assetsDir.mkdirs()
         }
 
-        // Obtener la ruta del SDK de Android directamente desde Gradle
         def sdkDir = android.sdkDirectory.path
         def d8Executable = "${sdkDir}/build-tools/34.0.0/d8"
         
-        // En Windows añade extensión .bat si aplica
         if (System.getProperty('os.name').toLowerCase().contains('windows')) {
             d8Executable += ".bat"
         }
 
-        def classFile = file("${buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/example/detectcamera/ScreenDaemon.class")
+        // Búsqueda dinámica de la clase compilada independientemente de la variante interna
+        def classFile = fileTree(dir: "${buildDir}/intermediates/javac", include: '**/ScreenDaemon.class').singleFile
         def outputJar = file("${assetsDir}/ScreenDaemon.jar")
 
         if (classFile.exists()) {
             exec {
                 commandLine d8Executable, '--output', outputJar.absolutePath, classFile.absolutePath
             }
-            println "ScreenDaemon.jar generado exitosamente en: ${outputJar.absolutePath}"
+            println "ScreenDaemon.jar generado con éxito en: ${outputJar.absolutePath}"
         } else {
-            throw new GradleException("No se encontró el archivo compilado ScreenDaemon.class en: ${classFile.absolutePath}")
+            throw new GradleException("No se encontró el archivo ScreenDaemon.class compilado.")
         }
     }
 }
