@@ -17,22 +17,37 @@ android {
     }
 }
 
-// Tarea personalizada para convertir el archivo .class a .dex (ScreenDaemon.jar) y copiarlo en assets
-task buildDaemonJar(type: Exec) {
+// Tarea para convertir las clases a formato DEX y empaquetar el ScreenDaemon.jar en assets
+task buildDaemonJar {
     dependsOn 'compileDebugJavaWithJavac'
     
-    doFirst {
+    doLast {
         def assetsDir = file("${project.rootDir}/app/src/main/assets")
         if (!assetsDir.exists()) {
             assetsDir.mkdirs()
         }
-    }
 
-    commandLine 'bash', '-c', """
-        $ANDROID_HOME/build-tools/34.0.0/d8 \
-            --output ${project.rootDir}/app/src/main/assets/ScreenDaemon.jar \
-            ${buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/example/detectcamera/ScreenDaemon.class
-    """
+        // Obtener la ruta del SDK de Android directamente desde Gradle
+        def sdkDir = android.sdkDirectory.path
+        def d8Executable = "${sdkDir}/build-tools/34.0.0/d8"
+        
+        // En Windows añade extensión .bat si aplica
+        if (System.getProperty('os.name').toLowerCase().contains('windows')) {
+            d8Executable += ".bat"
+        }
+
+        def classFile = file("${buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/example/detectcamera/ScreenDaemon.class")
+        def outputJar = file("${assetsDir}/ScreenDaemon.jar")
+
+        if (classFile.exists()) {
+            exec {
+                commandLine d8Executable, '--output', outputJar.absolutePath, classFile.absolutePath
+            }
+            println "ScreenDaemon.jar generado exitosamente en: ${outputJar.absolutePath}"
+        } else {
+            throw new GradleException("No se encontró el archivo compilado ScreenDaemon.class en: ${classFile.absolutePath}")
+        }
+    }
 }
 
 project(':app').tasks.preBuild.dependsOn buildDaemonJar
