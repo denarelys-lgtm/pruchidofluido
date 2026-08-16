@@ -4,85 +4,202 @@ import android.graphics.Rect;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.os.Build;
+import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Looper;
 import android.view.Surface;
-
-import java.io.OutputStream;
 import java.lang.reflect.Method;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.ByteBuffer;
 
 public class ScreenDaemon {
-    private static final int PORT = 9090;
-    private static final int WIDTH = 1280;
-    private static final int HEIGHT = 720;
-    private static final int BITRATE = 3_000_000; // 3 Mbps
-    private static final int FPS = 60;
+
+    private static final String MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC; // H.264
+    private static final int WIDTH = 720;
+    private static final int HEIGHT = 1280;
+    private static final int BIT_RATE = 3000000; // 3 Mbps
+    private static final int FRAME_RATE = 30;      // 30 FPS
+    private static final int I_FRAME_INTERVAL = 1; // 1 segundo entre keyframes
+
+    private static MediaCodec encoder;
+    private static Surface inputSurface;
+    private static IBinder virtualDisplayToken;
+    private static boolean isRunning = false;
 
     public static void main(String[] args) {
+        if (Looper.myLooper() == null) {
+            Looper.prepareMainLooper();
+        }
+        startCapture();
+    }
+
+    public static synchronized void startCapture() {
+        if (isRunning) return;
+        isRunning = true;
+
+        new Thread(() -> {
+            try {
+                prepareEncoder();
+                createVirtualDisplay();
+                encoder.start();
+                drainEncoder();
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                stopCapture();
+            }
+        }, "ScreenDaemon-Thread").start();
+    }
+
+    public static synchronized void stopCapture() {
+        isRunning = false;
         try {
-            ServerSocket serverSocket = new ServerSocket(PORT);
-            System.out.println("Daemon H.264 activo en puerto " + PORT);
-
-            while (true) {
-                Socket client = serverSocket.accept();
-                OutputStream out = client.getOutputStream();
-
-                MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, WIDTH, HEIGHT);
-                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                format.setInteger(MediaFormat.KEY_BIT_RATE, BITRATE);
-                format.setInteger(MediaFormat.KEY_FRAME_RATE, FPS);
-                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
-
-                MediaCodec codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
-                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                Surface inputSurface = codec.createInputSurface();
-
-                // Interfaz SurfaceControl por reflexión
-                Class<?> surfaceControlClass = Class.forName("android.view.SurfaceControl");
-                Method createDisplayMethod = surfaceControlClass.getMethod("createDisplay", String.class, boolean.class);
-                IBinder displayToken = (IBinder) createDisplayMethod.invoke(null, "ScreenDaemonDisplay", false);
-
-                Method openTransactionMethod = surfaceControlClass.getMethod("openTransaction");
-                Method closeTransactionMethod = surfaceControlClass.getMethod("closeTransaction");
-                Method setDisplaySurfaceMethod = surfaceControlClass.getMethod("setDisplaySurface", IBinder.class, Surface.class);
-                Method setDisplayProjectionMethod = surfaceControlClass.getMethod("setDisplayProjection", IBinder.class, int.class, Rect.class, Rect.class);
-                Method setDisplayLayerStackMethod = surfaceControlClass.getMethod("setDisplayLayerStack", IBinder.class, int.class);
-
-                openTransactionMethod.invoke(null);
-                setDisplaySurfaceMethod.invoke(null, displayToken, inputSurface);
-                setDisplayProjectionMethod.invoke(null, displayToken, 0, new Rect(0, 0, WIDTH, HEIGHT), new Rect(0, 0, WIDTH, HEIGHT));
-                setDisplayLayerStackMethod.invoke(null, displayToken, 0);
-                closeTransactionMethod.invoke(null);
-
-                codec.start();
-                MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-
-                while (!client.isClosed()) {
-                    int outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000);
-                    if (outputBufferIndex >= 0) {
-                        ByteBuffer outputBuffer = codec.getOutputBuffer(outputBufferIndex);
-                        byte[] outData = new byte[bufferInfo.size];
-                        outputBuffer.get(outData);
-
-                        byte[] header = ByteBuffer.allocate(4).putInt(outData.length).array();
-                        out.write(header);
-                        out.write(outData);
-                        out.flush();
-
-                        codec.releaseOutputBuffer(outputBufferIndex, false);
-                    }
-                }
-
-                codec.stop();
-                codec.release();
-
-                Method destroyDisplayMethod = surfaceControlClass.getMethod("destroyDisplay", IBinder.class);
-                destroyDisplayMethod.invoke(null, displayToken);
+            if (encoder != null) {
+                encoder.stop();
+                encoder.release();
+                encoder = null;
+            }
+            if (inputSurface != null) {
+                inputSurface.release();
+                inputSurface = null;
+            }
+            if (virtualDisplayToken != null) {
+                destroyVirtualDisplay(virtualDisplayToken);
+                virtualDisplayToken = null;
             }
         } catch (Exception e) {
             e.printStackTrace();
+        }
+    }
+
+    private static void prepareEncoder() throws Exception {
+        MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, WIDTH, HEIGHT);
+        format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+        format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE);
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
+        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL);
+
+        encoder = MediaCodec.createEncoderByType(MIME_TYPE);
+        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        inputSurface = encoder.createInputSurface();
+    }
+
+    private static void createVirtualDisplay() throws Exception {
+        Class<?> surfaceControlClass = Class.forName("android.view.SurfaceControl");
+
+        // 1. Obtener Token del Display Físico Principal
+        IBinder mainDisplayToken = getMainDisplayToken(surfaceControlClass);
+
+        // 2. Crear Display Virtual para la captura
+        Method createDisplayMethod = surfaceControlClass.getMethod("createDisplay", String.class, boolean.class);
+        virtualDisplayToken = (IBinder) createDisplayMethod.invoke(null, "ScreenDaemonDisplay", false);
+
+        // 3. Iniciar Transacción de SurfaceControl
+        openSurfaceControlTransaction(surfaceControlClass);
+
+        try {
+            // Asignar la superficie de entrada del MediaCodec
+            Method setDisplaySurfaceMethod = surfaceControlClass.getMethod("setDisplaySurface", IBinder.class, Surface.class);
+            setDisplaySurfaceMethod.invoke(null, virtualDisplayToken, inputSurface);
+
+            // Asignar LayerStack 0 (capa pública activa del sistema)
+            Method setDisplayLayerStackMethod = surfaceControlClass.getMethod("setDisplayLayerStack", IBinder.class, int.class);
+            setDisplayLayerStackMethod.invoke(null, virtualDisplayToken, 0);
+
+            // Configurar Rectángulos de Proyección
+            Rect layerStackRect = new Rect(0, 0, WIDTH, HEIGHT);
+            Rect displayRect = new Rect(0, 0, WIDTH, HEIGHT);
+
+            Method setDisplayProjectionMethod = surfaceControlClass.getMethod(
+                    "setDisplayProjection", IBinder.class, int.class, Rect.class, Rect.class
+            );
+            setDisplayProjectionMethod.invoke(null, virtualDisplayToken, 0, layerStackRect, displayRect);
+
+        } finally {
+            closeSurfaceControlTransaction(surfaceControlClass);
+        }
+    }
+
+    private static IBinder getMainDisplayToken(Class<?> surfaceControlClass) throws Exception {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Method getPhysicalDisplayIdsMethod = surfaceControlClass.getMethod("getPhysicalDisplayIds");
+            long[] ids = (long[]) getPhysicalDisplayIdsMethod.invoke(null);
+            if (ids != null && ids.length > 0) {
+                Method getPhysicalDisplayTokenMethod = surfaceControlClass.getMethod("getPhysicalDisplayToken", long.class);
+                return (IBinder) getPhysicalDisplayTokenMethod.invoke(null, ids[0]);
+            }
+        }
+        
+        // Fallback para versiones anteriores o reflexiones estándar
+        Method getBuiltInDisplayMethod = surfaceControlClass.getMethod("getBuiltInDisplay", int.class);
+        return (IBinder) getBuiltInDisplayMethod.invoke(null, 0);
+    }
+
+    private static void openSurfaceControlTransaction(Class<?> surfaceControlClass) throws Exception {
+        try {
+            Method openTransactionMethod = surfaceControlClass.getMethod("openTransaction");
+            openTransactionMethod.invoke(null);
+        } catch (NoSuchMethodException e) {
+            // En versiones recientes de Android las transacciones se aplican automáticamente o mediante GlobalTransaction
+        }
+    }
+
+    private static void closeSurfaceControlTransaction(Class<?> surfaceControlClass) throws Exception {
+        try {
+            Method closeTransactionMethod = surfaceControlClass.getMethod("closeTransaction");
+            closeTransactionMethod.invoke(null);
+        } catch (NoSuchMethodException e) {
+            // Fallback si no existe closeTransaction
+        }
+    }
+
+    private static void destroyVirtualDisplay(IBinder token) {
+        try {
+            Class<?> surfaceControlClass = Class.forName("android.view.SurfaceControl");
+            Method destroyDisplayMethod = surfaceControlClass.getMethod("destroyDisplay", IBinder.class);
+            destroyDisplayMethod.invoke(null, token);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void drainEncoder() {
+        MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+        long lastKeyframeRequest = System.currentTimeMillis();
+
+        while (isRunning) {
+            // Solicitar un Keyframe cada 3 segundos si el reproductor web requiere reconexión
+            if (System.currentTimeMillis() - lastKeyframeRequest > 3000) {
+                requestKeyframe();
+                lastKeyframeRequest = System.currentTimeMillis();
+            }
+
+            int outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000); // 10ms timeout
+
+            if (outputBufferIndex >= 0) {
+                ByteBuffer outputBuffer = encoder.getOutputBuffer(outputBufferIndex);
+
+                if (outputBuffer != null && bufferInfo.size > 0) {
+                    outputBuffer.position(bufferInfo.offset);
+                    outputBuffer.limit(bufferInfo.offset + bufferInfo.size);
+
+                    byte[] outData = new byte[bufferInfo.size];
+                    outputBuffer.get(outData);
+
+                    // Transmitir fragmento H.264 al WebServer
+                    WebServer.sendH264Chunk(outData);
+                }
+
+                encoder.releaseOutputBuffer(outputBufferIndex, false);
+            }
+        }
+    }
+
+    private static void requestKeyframe() {
+        if (encoder != null) {
+            Bundle params = new Bundle();
+            params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
+            encoder.setParameters(params);
         }
     }
 }
