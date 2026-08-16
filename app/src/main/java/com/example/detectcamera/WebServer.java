@@ -30,13 +30,27 @@ public class WebServer extends NanoWSD {
         this.passwordValida = pass != null ? pass.trim() : "";
     }
 
+    // Método principal para transmitir H.264 por WebSocket
     public void retransmitirFrameH264(byte[] h264Chunk) {
+        if (h264Chunk == null) return;
         for (ScreenWebSocket socket : sockets) {
             try {
                 socket.send(h264Chunk);
             } catch (IOException e) {
                 socket.closeQuietly();
             }
+        }
+    }
+
+    // Métodos de compatibilidad requeridos por CameraService y ScreenCaptureController
+    public void actualizarFrameCamara(byte[] frame) {
+        // Compatibilidad con CameraService
+    }
+
+    public void actualizarFramePantalla(byte[] frame) {
+        // Compatibilidad con ScreenCaptureController
+        if (frame != null) {
+            retransmitirFrameH264(frame);
         }
     }
 
@@ -133,7 +147,7 @@ public class WebServer extends NanoWSD {
         protected void onPong(WebSocketFrame pong) {}
 
         @Override
-        protected void Exception(IOException exception) {
+        protected void onException(IOException exception) {
             closeQuietly();
         }
 
